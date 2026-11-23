@@ -69,4 +69,4 @@ npm --prefix apps/web run build
 
 See `docs/source-contracts.md`. County parcel and building layers, municipal boundaries, City of Miami permits, and the county copy of FEMA flood zones. The national NFHL host at `hazards.fema.gov` reset the connection from this machine on 23 November 2026, so it is not a live dependency.
 
-Map tiles are OpenFreeMap, which uses OpenStreetMap data. The app shows that attribution on the map.
+The report map is Esri World Imagery, with Esri, Maxar, and Earthstar Geographics named on the map. The gold line is the parcel or parent parcel from the property appraiser, not a flood shape.
