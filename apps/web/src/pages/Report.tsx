@@ -10,6 +10,17 @@ const SUGGESTED = [
   "Does this condo have enough money in reserves?",
 ];
 
+function displayAddress(value: string | null) {
+  if (!value) return "Address not published";
+  return value.toLowerCase().replace(/\b([a-z])/g, (letter) => letter.toUpperCase());
+}
+
+function statusWord(finding: Finding) {
+  const raw = String(finding.fields.PermitStatus || finding.title.split("·")[0] || "").trim();
+  if (!raw) return "Permit";
+  return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+}
+
 export function ReportPage() {
   const { propertyId = "" } = useParams();
   const [params, setParams] = useSearchParams();
@@ -48,15 +59,51 @@ export function ReportPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const groups = useMemo(() => {
-    const order = ["Property identity", "Permit history", "Flood hazard designation"];
-    const map = new Map<string, Finding[]>();
-    for (const finding of report?.findings ?? []) {
-      const list = map.get(finding.theme) ?? [];
-      list.push(finding);
-      map.set(finding.theme, list);
+  const rows = useMemo(() => {
+    if (!report) return [];
+    const unit = report.findings.filter((finding) => finding.attribution === "unit_folio");
+    const parent = report.findings.filter((finding) => finding.attribution === "parent_folio");
+    const flood = report.findings.find((finding) => finding.theme.startsWith("Flood"));
+    const refused = report.findings.find((finding) => finding.attribution === "refused_address_match");
+    const next: { key: string; word: string; text: string; hot?: boolean; finding: Finding | null }[] = unit.map((finding) => {
+      const scope = String(finding.fields.ScopeOfWork || "").trim();
+      const short = scope && scope.length < 72 ? scope : "On this unit.";
+      return {
+        key: finding.id,
+        word: statusWord(finding),
+        text: statusWord(finding).toLowerCase() === "final"
+          ? `${short} Final is the city's word, not an inspection.`
+          : `${short} Ask if the work is finished.`,
+        hot: statusWord(finding).toLowerCase() === "active",
+        finding,
+      };
+    });
+    if (parent.length) {
+      next.push({
+        key: "parent",
+        word: String(parent.length),
+        text: "Permits on the parent parcel. Not this unit.",
+        finding: null,
+      });
     }
-    return [...map.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
+    if (flood) {
+      const zone = flood.fields.FZONE ? String(flood.fields.FZONE) : flood.title;
+      next.push({
+        key: flood.id,
+        word: zone,
+        text: flood.status === "checked_none" ? flood.what : "Flood zone at this point. Not a forecast.",
+        finding: flood,
+      });
+    }
+    if (refused) {
+      next.push({
+        key: refused.id,
+        word: "No",
+        text: "Same-street folio was not linked.",
+        finding: refused,
+      });
+    }
+    return next;
   }, [report]);
 
   async function onAsk(event: FormEvent) {
@@ -110,82 +157,80 @@ export function ReportPage() {
   }
 
   const property = report.property;
-  return (
-    <main className="page">
-      <div className="report-head">
-        <div>
-          <Link to="/" className="muted no-print">Search another address</Link>
-          <h1>{property.address}</h1>
-          <div className="meta">
-            <span>Folio {property.folio}</span>
-            {property.parent_folio ? <span>Parent {property.parent_folio}</span> : null}
-            <span>{property.municipality || "Municipality unresolved"}</span>
-            <span>{property.official_use === "condo" ? "Condominium unit" : "House record"}</span>
-            <span>Matched by official folio</span>
-          </div>
-        </div>
-        <div className="toggles no-print">
-          <div className="toggle" role="group" aria-label="Buy or rent">
-            <button type="button" aria-pressed={intent === "buy"} onClick={() => setParams({ intent: "buy", use })}>Buy</button>
-            <button type="button" aria-pressed={intent === "rent"} onClick={() => setParams({ intent: "rent", use })}>Rent</button>
-          </div>
-        </div>
-      </div>
-      {property.limitations ? <p className="limit">{property.limitations}</p> : null}
-      {report.refresh_error ? <p className="error">Live refresh failed. Showing the last stored report. {report.refresh_error}</p> : null}
+  const parentPermits = report.findings.filter((finding) => finding.attribution === "parent_folio");
+  const where = [
+    property.municipality ? displayAddress(property.municipality) : "Municipality unresolved",
+    property.official_use === "condo" ? "condominium unit" : "house record",
+  ].join(" ");
 
-      <div className="layout">
-        <div>
-          {groups.map(([theme, findings]) => {
-            const parentPermits = findings.filter((finding) => finding.attribution === "parent_folio");
-            const primary = findings.filter((finding) => finding.attribution !== "parent_folio");
-            return (
-            <section className="group" key={theme}>
-              <h2>{theme}</h2>
-              <div className="stack">
-                {primary.map((finding) => (
-                  <button key={finding.id} className="finding" type="button" onClick={() => setOpen(finding)}>
-                    <div className="theme">{finding.status.replaceAll("_", " ")}</div>
-                    <h3>{finding.title}</h3>
-                    <p>{finding.what}</p>
-                    <p className="ask">{finding.ask}</p>
-                  </button>
-                ))}
-                {parentPermits.length > 0 ? (
-                  <details className="card">
-                    <summary>{parentPermits.length} permits on the parent parcel, not this unit</summary>
-                    <div className="stack" style={{ marginTop: 12 }}>
-                      {parentPermits.map((finding) => (
-                        <button key={finding.id} className="finding" type="button" onClick={() => setOpen(finding)}>
-                          <h3>{finding.title}</h3>
-                          <p>{finding.what}</p>
-                        </button>
-                      ))}
-                    </div>
-                  </details>
-                ) : null}
-              </div>
-            </section>
-            );
-          })}
-        </div>
-        <aside className="stack">
-          <section className="side-block">
-            <h2>Map</h2>
-            {property.lon != null && property.lat != null ? (
-              <MapPane lon={property.lon} lat={property.lat} geometry={property.geometry} geometryKind={property.geometry_kind} />
-            ) : (
-              <p>No coordinates were published for this folio.</p>
-            )}
-            <p className="map-note">
-              {property.geometry_kind === "parent_parcel"
-                ? "Outline is the parent parcel, not the unit interior. The dot is the property-appraiser point."
-                : property.geometry_kind === "parcel"
-                  ? "Outline is the parcel polygon. The dot is the property-appraiser point."
-                  : "Dot only. A point is not a surveyed building outline."}
-              {" "}Basemap © OpenStreetMap contributors, via OpenFreeMap.
-            </p>
-          </section>
+  return (
+    <main className="sheet-page">
+      <div className="sheet-stage">
+        {property.lon != null && property.lat != null ? (
+          <MapPane
+            lon={property.lon}
+            lat={property.lat}
+            geometry={property.geometry}
+            geometryKind={property.geometry_kind}
+            sheet
+          />
+        ) : (
+          <p className="map-missing">No coordinates were published for this folio.</p>
+        )}
+        <aside className="sheet">
+          <div className="sheet-top">
+            <Link to="/" className="mark">Before You Sign</Link>
+            <div className="seg" role="group" aria-label="Buy or rent">
+              <button type="button" aria-pressed={intent === "buy"} onClick={() => setParams({ intent: "buy", use })}>Buy</button>
+              <button type="button" aria-pressed={intent === "rent"} onClick={() => setParams({ intent: "rent", use })}>Rent</button>
+            </div>
+          </div>
+          <h1>{displayAddress(property.address)}</h1>
+          <p className="where">{where}</p>
+          {rows.map((row) => (
+            <button
+              key={row.key}
+              type="button"
+              className="scan"
+              onClick={() => {
+                if (row.finding) setOpen(row.finding);
+                else document.getElementById("parent-permits")?.scrollIntoView({ behavior: "smooth" });
+              }}
+            >
+              <span className={row.hot ? "word hot" : "word"}>{row.word}</span>
+              <span>{row.text}</span>
+            </button>
+          ))}
+          <p className="note">
+            {property.geometry_kind === "parent_parcel"
+              ? "The gold line is the parent parcel, not the unit."
+              : property.geometry_kind === "parcel"
+                ? "The gold line is the parcel polygon."
+                : "The dot is a point. It is not a surveyed outline."}
+          </p>
+          <p className="folio">Folio {property.folio}{property.parent_folio ? ` · Parent ${property.parent_folio}` : ""}</p>
+        </aside>
+      </div>
+
+      {property.limitations ? <p className="limit page-pad">{property.limitations}</p> : null}
+      {report.refresh_error ? <p className="error page-pad">Live refresh failed. Showing the last stored report. {report.refresh_error}</p> : null}
+
+      <div className="page-pad below">
+        {parentPermits.length > 0 ? (
+          <details className="card" id="parent-permits">
+            <summary>{parentPermits.length} permits on the parent parcel, not this unit</summary>
+            <div className="stack" style={{ marginTop: 12 }}>
+              {parentPermits.map((finding) => (
+                <button key={finding.id} className="finding" type="button" onClick={() => setOpen(finding)}>
+                  <h3>{finding.title}</h3>
+                  <p>{finding.what}</p>
+                </button>
+              ))}
+            </div>
+          </details>
+        ) : null}
+
+        <div className="layout">
           <section className="side-block">
             <h2>What to ask</h2>
             {report.checklist.map((item) => (
@@ -216,42 +261,43 @@ export function ReportPage() {
             ))}
             <p className="muted">Retrieved {report.retrieved_at || "unknown"}.</p>
           </section>
-        </aside>
-      </div>
-
-      <section className="card ask-box no-print" style={{ marginTop: 28 }}>
-        <p className="kicker">Ask this property</p>
-        <h2>Questions stay on this folio.</h2>
-        <div className="suggestions">
-          {SUGGESTED.map((item) => (
-            <button key={item} type="button" onClick={() => setQuestion(item)}>{item}</button>
-          ))}
         </div>
-        <form onSubmit={onAsk}>
-          <textarea aria-label="Question" value={question} onChange={(event) => setQuestion(event.target.value)} />
-          <div className="row-actions">
-            <button className="solid" type="submit" disabled={asking}>{asking ? "Checking records" : "Ask"}</button>
-          </div>
-        </form>
-        {answer ? (
-          <div>
-            <p>{answer.answer}</p>
-            {answer.citations.map((citation) => (
-              <button
-                key={citation.citation_id}
-                className="ghost"
-                type="button"
-                onClick={() => setOpen(report.findings.find((finding) => finding.id === citation.finding_id) || null)}
-              >
-                {citation.citation_id} · {citation.label}
-              </button>
-            ))}
-            {answer.limitations.map((item) => (
-              <p className="muted" key={item}>{item}</p>
+
+        <section className="card ask-box no-print">
+          <p className="kicker">Ask this property</p>
+          <h2>Questions stay on this folio.</h2>
+          <div className="suggestions">
+            {SUGGESTED.map((item) => (
+              <button key={item} type="button" onClick={() => setQuestion(item)}>{item}</button>
             ))}
           </div>
-        ) : null}
-      </section>
+          <form onSubmit={onAsk}>
+            <textarea aria-label="Question" value={question} onChange={(event) => setQuestion(event.target.value)} />
+            <div className="row-actions">
+              <button className="solid" type="submit" disabled={asking}>{asking ? "Checking records" : "Ask"}</button>
+            </div>
+          </form>
+          {answer ? (
+            <div>
+              <p>{answer.answer}</p>
+              {answer.citations.map((citation) => (
+                <button
+                  key={citation.citation_id}
+                  className="ghost"
+                  type="button"
+                  onClick={() => setOpen(report.findings.find((finding) => finding.id === citation.finding_id) || null)}
+                >
+                  {citation.citation_id} · {citation.label}
+                </button>
+              ))}
+              {answer.limitations.map((item) => (
+                <p className="muted" key={item}>{item}</p>
+              ))}
+            </div>
+          ) : null}
+        </section>
+
+      </div>
 
       {open ? (
         <div className="drawer-back no-print" onClick={() => setOpen(null)}>
