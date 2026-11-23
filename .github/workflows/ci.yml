@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: bys
+          POSTGRES_PASSWORD: bys
+          POSTGRES_DB: before_you_sign
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bys -d before_you_sign"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://bys:bys@localhost:5433/before_you_sign
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --project backend
+      - run: uv run --project backend alembic upgrade head
+      - run: uv run --project backend pytest -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm --prefix apps/web ci
+      - run: npm --prefix apps/web run build

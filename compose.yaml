@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: bys
+      POSTGRES_PASSWORD: bys
+      POSTGRES_DB: before_you_sign
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - bys_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bys -d before_you_sign"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  bys_pg:
